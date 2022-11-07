@@ -95,6 +95,8 @@ namespace ShowerRecoTools {
     //1: override plane-by-plane
     //2: override only if all three planes are well-defined
 
+    bool fApplyCorrectionsInNorm; // Whether to instead apply calorimetry corrections in norm.
+
     art::InputTag fPFParticleLabel;
     int fVerbose;
 
@@ -126,6 +128,7 @@ namespace ShowerRecoTools {
     , fApplyCorrectionsInNorm(pset.get<bool>("ApplyCorrectionsInNorm"))
     , fOverrideByPlane(pset.get<bool>("OverrideByPlane"))
     , fResultsOverrideMode(pset.get<int>("ResultsOverrideMode"))
+    , fApplyCorrectionsInNorm(pset.get<bool>("ApplyCorrectionsInNorm"))
     , fPFParticleLabel(pset.get<art::InputTag>("PFParticleLabel"))
     , fVerbose(pset.get<int>("Verbose"))
     , fShowerStartPositionInputLabel(pset.get<std::string>("ShowerStartPositionInputLabel"))
@@ -144,10 +147,7 @@ namespace ShowerRecoTools {
     if ( fApplyCorrectionsInNorm ) {
       auto tool_psets = pset.get< std::vector< fhicl::ParameterSet > >("NormTools");
 
-      int tCounter = 0;
       for ( auto const& tool_pset : tool_psets ) {
-        //std::cout << "pushing back tools..." << tCounter << std::endl;
-        tCounter++;
 	      fNormalizationTools.push_back( art::make_tool<INormalizeCharge>(tool_pset) );
       }
     }
@@ -646,7 +646,6 @@ namespace ShowerRecoTools {
     double ret = dQdx;
     for (auto const& nt : fNormalizationTools) {
       ret = nt->Normalize(ret, e, h, location, direction, t0);
-      //std::cout << "\t norm: dQdx = " << ret << std::endl;
     }
     
     return ret;
