@@ -298,8 +298,7 @@ namespace ShowerRecoTools {
               double dQdxNorm = dQdx;
               // Attempt the normalization //Mike 
               if ( fApplyCorrectionsInNorm ) {
-                //geo::Vector_t displacement(0, 0, 0);
-                //std::cout << "Running the CorrectionsInNorm for showers" << std::endl;
+
                 dQdxNorm = Normalize( dQdx,
                   Event,
                   *hit,
@@ -307,7 +306,6 @@ namespace ShowerRecoTools {
                   showerPCADir,
                   0 );
               }
-              //std::cout << "Unidirection: dQdx: " << dQdx << " dQdxNorm: " << dQdxNorm << std::endl;
 
               dEdx = fCalorimetryAlg.dEdx_AREA(
                 clockData, detProp, dQdxNorm, avgT / nhits, trackPlaneHits.at(0)->WireID().Plane);
@@ -368,7 +366,6 @@ namespace ShowerRecoTools {
     double ret = dQdx;
     for (auto const& nt : fNormalizationTools) {
       ret = nt->Normalize(ret, e, h, location, direction, t0);
-      //std::cout << "\t norm: dQdx = " << ret << std::endl;
     }
     
     return ret;
