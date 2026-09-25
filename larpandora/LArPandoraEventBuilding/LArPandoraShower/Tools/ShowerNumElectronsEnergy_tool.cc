@@ -45,31 +45,27 @@ namespace ShowerRecoTools {
                          reco::shower::ShowerElementHolder& ShowerElementHolder) override;
 
   private:
-    double CalculateEnergy(const detinfo::DetectorClocksData& clockData,
+    double CalculateEnergy(const art::Event& Event,
+                           const detinfo::DetectorClocksData& clockData,
                            const detinfo::DetectorPropertiesData& detProp,
                            const std::vector<art::Ptr<recob::Hit>>& hits,
-                           const geo::PlaneID::PlaneID_t plane,
-                           const art::Event& Event,  
-                           const bool applyNormalization,
-                           const bool applyMCLifetimeCorrection,
-                           const HitsToSpacePoints& hitsToSpacePoints,
-                           const geo::Vector_t& showerPCADir) const;
+                           const geo::PlaneID::PlaneID_t plane) const;
 
-    // Normalization function
-    const double Normalize(double dQdx,
-         const art::Event& e,
-         const recob::Hit& h,
-         const geo::Point_t& location,
-         const geo::Vector_t& direction,
-         const double t0) const;
+    // Normalize the hit charge using its space point position and the shower direction
+    double NormalizedHitCharge(double charge,
+                               const art::Event& e,
+                               const art::Ptr<recob::Hit>& hit) const;
 
     art::InputTag fPFParticleLabel;
     int fVerbose;
 
     std::string fShowerEnergyOutputLabel;
     std::string fShowerBestPlaneOutputLabel;
+    std::string fShowerDirectionInputLabel;
 
     std::vector< std::unique_ptr<INormalizeCharge> > fNormalizationTools;
+    HitsToSpacePoints fHitsToSpacePoints; // Filled per event when fApplyCorrectionsInNorm
+    geo::Vector_t fShowerDir;             // Filled per shower when fApplyCorrectionsInNorm
 
     //Services
     geo::WireReadoutGeom const& fChannelMap = art::ServiceHandle<geo::WireReadout>()->Get();
@@ -88,6 +84,7 @@ namespace ShowerRecoTools {
     , fVerbose(pset.get<int>("Verbose"))
     , fShowerEnergyOutputLabel(pset.get<std::string>("ShowerEnergyOutputLabel"))
     , fShowerBestPlaneOutputLabel(pset.get<std::string>("ShowerBestPlaneOutputLabel"))
+    , fShowerDirectionInputLabel(pset.get<std::string>("ShowerDirectionInputLabel", "ShowerDirection"))
     , fCalorimetryAlg(pset.get<fhicl::ParameterSet>("CalorimetryAlg"))
     , fRecombinationFactor(pset.get<double>("RecombinationFactor"))
     , fApplyCorrectionsInNorm(pset.get<bool>("ApplyCorrectionsInNorm", false))
@@ -96,9 +93,7 @@ namespace ShowerRecoTools {
     if ( fApplyCorrectionsInNorm ) {
       auto tool_psets = pset.get< std::vector< fhicl::ParameterSet > >("NormTools");
 
-      int tCounter = 0;
       for ( auto const& tool_pset : tool_psets ) {
-        tCounter++;
         fNormalizationTools.push_back( art::make_tool<INormalizeCharge>(tool_pset) );
       }
     }
@@ -120,11 +115,23 @@ namespace ShowerRecoTools {
     //Get the clusters
     auto const clusHandle = Event.getValidHandle<std::vector<recob::Cluster>>(fPFParticleLabel);
 
-    geo::Vector_t showerPCADir = {-999, -999, -999};
-    if (fApplyCorrectionsInNorm && ShowerEleHolder.GetElement("ShowerDirection", showerPCADir) != 0) {
-      mf::LogError("ShowerNumElectronsEnergy")
-        << "ShowerDirection not available but normalization requested, skipping energy calculation";
-      return 1;
+    if (fApplyCorrectionsInNorm) {
+      // Setup normalization tools, the shower direction and the hit -> space point map
+      fShowerDir = {-999, -999, -999};
+      if (ShowerEleHolder.GetElement(fShowerDirectionInputLabel, fShowerDir) != 0) {
+        mf::LogError("ShowerNumElectronsEnergy")
+          << "ShowerDirection not available but normalization requested, skipping energy calculation";
+        return 1;
+      }
+
+      for (auto const& nt : fNormalizationTools)
+        nt->setup(Event);
+
+      fHitsToSpacePoints.clear();
+      SpacePointVector spacePointVector;
+      SpacePointsToHits spacePointsToHits;
+      LArPandoraHelper::CollectSpacePoints(
+        Event, fPFParticleLabel.label(), spacePointVector, spacePointsToHits, fHitsToSpacePoints);
     }
 
     const art::FindManyP<recob::Cluster>& fmc =
@@ -138,19 +145,6 @@ namespace ShowerRecoTools {
     // art::FindManyP<recob::Hit> fmhc(clusHandle, Event, fPFParticleLabel);
 
     std::map<geo::PlaneID::PlaneID_t, std::vector<art::Ptr<recob::Hit>>> planeHits;
-
-
-    SpacePointVector spacePointVector;
-    SpacePointsToHits spacePointsToHits;
-    HitsToSpacePoints hitsToSpacePoints;
-
-    if (fApplyCorrectionsInNorm) {
-      LArPandoraHelper::CollectSpacePoints(Event, fPFParticleLabel.label(), spacePointVector, spacePointsToHits, hitsToSpacePoints);
-    }
-
-    // Setup normalization tools
-    for (auto const& nt : fNormalizationTools)
-      nt->setup(Event);
 
     //Loop over the clusters in the plane and get the hits
     for (auto const& cluster : clusters) {
@@ -182,10 +176,10 @@ namespace ShowerRecoTools {
       unsigned int planeNumHits = hits.size();
 
       //Calculate the Energy for
-      double Energy = CalculateEnergy(clockData, detProp, hits, plane, Event, fApplyCorrectionsInNorm, fApplyMCLifetimeCorrection, hitsToSpacePoints, showerPCADir);
+      double energy = CalculateEnergy(Event, clockData, detProp, hits, plane);
 
       // If the energy is negative, leave it at -999
-      if (Energy > 0) energyVec.at(plane) = Energy;
+      if (energy > 0) energyVec.at(plane) = energy;
 
       if (planeNumHits > bestPlaneNumHits) {
         bestPlane = plane;
@@ -206,18 +200,14 @@ namespace ShowerRecoTools {
   }
 
   // function to calculate the reco energy
-  double ShowerNumElectronsEnergy::CalculateEnergy(const detinfo::DetectorClocksData& clockData,
+  double ShowerNumElectronsEnergy::CalculateEnergy(const art::Event& Event,
+                                                   const detinfo::DetectorClocksData& clockData,
                                                    const detinfo::DetectorPropertiesData& detProp,
                                                    const std::vector<art::Ptr<recob::Hit>>& hits,
-                                                   const geo::PlaneID::PlaneID_t plane,
-                                                   const art::Event& Event,
-                                                   const bool applyNormalization = false,
-                                                   const bool applyMCLifetimeCorrection = false,
-                                                   const HitsToSpacePoints& hitsToSpacePoints = HitsToSpacePoints{},
-                                                   const geo::Vector_t& showerPCADir = geo::Vector_t{0, 0, 0}) const
+                                                   const geo::PlaneID::PlaneID_t plane) const
   {
 
-    if (applyNormalization && hitsToSpacePoints.empty()) {
+    if (fApplyCorrectionsInNorm && fHitsToSpacePoints.empty()) {
       if (fVerbose) {
           mf::LogError("ShowerNumElectronsEnergy") << "No hits to space points mapping provided while requesting normalization, returning error energy value -999" << std::endl;
 
@@ -233,23 +223,11 @@ namespace ShowerRecoTools {
 
     for (auto const& hit : hits) {
 
-      double hitCharge = 0;
-      if (applyMCLifetimeCorrection) {
-        hitCharge = hit->Integral() * fCalorimetryAlg.LifetimeCorrection(clockData, detProp, hit->PeakTime());
-      } else {
-        hitCharge = hit->Integral();
-      }
+      double hitCharge = fApplyMCLifetimeCorrection ? hit->Integral() * fCalorimetryAlg.LifetimeCorrection(clockData, detProp, hit->PeakTime()) : hit->Integral();
 
       hitCharge /= fRecombinationFactor;
 
-      if ( applyNormalization ) {
-        HitsToSpacePoints::const_iterator hIter = hitsToSpacePoints.find(hit);
-        if (hitsToSpacePoints.end() != hIter) {
-          const art::Ptr<recob::SpacePoint> spacepoint = hIter->second;
-          hitCharge = Normalize(hitCharge, Event, *hit, spacepoint->position(), showerPCADir, 0);
-        }
-        // hits without spacepoints contribute uncorrected charge
-      }
+      if (fApplyCorrectionsInNorm) hitCharge = NormalizedHitCharge(hitCharge, Event, hit);
 
       correctedtotalCharge += hitCharge;
     }
@@ -259,18 +237,18 @@ namespace ShowerRecoTools {
     return totalEnergy;
   }
 
-  const double ShowerNumElectronsEnergy::Normalize(double dQdx,
-          const art::Event& e,
-          const recob::Hit& h,
-          const geo::Point_t& location,
-          const geo::Vector_t& direction,
-          const double t0) const
+  double ShowerNumElectronsEnergy::NormalizedHitCharge(double charge,
+                                                       const art::Event& e,
+                                                       const art::Ptr<recob::Hit>& hit) const
   {
-    double ret = dQdx;
-    for (auto const& nt : fNormalizationTools) {
-      ret = nt->Normalize(ret, e, h, location, direction, t0);
-    }
-    
+    // Hits without space points contribute uncorrected charge
+    auto const hIter = fHitsToSpacePoints.find(hit);
+    if (hIter == fHitsToSpacePoints.end()) return charge;
+
+    double ret = charge;
+    for (auto const& nt : fNormalizationTools)
+      ret = nt->Normalize(ret, e, *hit, hIter->second->position(), fShowerDir, 0);
+
     return ret;
   }
 }

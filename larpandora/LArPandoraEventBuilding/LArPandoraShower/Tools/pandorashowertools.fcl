@@ -46,6 +46,7 @@ showernumelectronsenergy:{
      # PFParticleLabel: "pandora"
      ShowerEnergyOutputLabel: "ShowerEnergy"
      ShowerBestPlaneOutputLabel: "ShowerBestPlane"
+     ShowerDirectionInputLabel: "ShowerDirection"
  }
 
 

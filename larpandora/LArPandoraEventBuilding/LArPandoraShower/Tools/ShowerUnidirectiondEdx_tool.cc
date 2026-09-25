@@ -42,13 +42,12 @@ namespace ShowerRecoTools {
 
   private:
 
-    // Normalization function
-    const double Normalize(double dQdx,
-         const art::Event& e,
-         const recob::Hit& h,
-         const geo::Point_t& location,
-         const geo::Vector_t& direction,
-         const double t0) const ;
+    // Normalize dQdx using the charge-weighted space point position of the used hits
+    double NormalizedQdx(double dQdx,
+                         const art::Event& e,
+                         const std::vector<art::Ptr<recob::Hit>>& hits,
+                         const std::vector<float>& charges,
+                         const geo::Vector_t& direction) const;
 
     //Define the services and algorithms
     art::ServiceHandle<geo::Geometry> fGeom;
@@ -56,6 +55,7 @@ namespace ShowerRecoTools {
     calo::CalorimetryAlg fCalorimetryAlg;
 
     std::vector< std::unique_ptr<INormalizeCharge> > fNormalizationTools;
+    HitsToSpacePoints fHitsToSpacePoints; // Filled per event when fApplyCorrectionsInNorm
 
     //fcl parameters.
     int fVerbose;
@@ -95,9 +95,7 @@ namespace ShowerRecoTools {
     if ( fApplyCorrectionsInNorm ) {
       auto tool_psets = pset.get< std::vector< fhicl::ParameterSet > >("NormTools");
 
-      int tCounter = 0;
       for ( auto const& tool_pset : tool_psets ) {
-        tCounter++;
         fNormalizationTools.push_back( art::make_tool<INormalizeCharge>(tool_pset) );
       }
     }
@@ -109,11 +107,6 @@ namespace ShowerRecoTools {
   {
 
     dEdxTrackLength = fdEdxTrackLength;
-
-    SpacePointVector spacePointVector;
-    SpacePointsToHits spacePointsToHits;
-    HitsToSpacePoints hitsToSpacePoints;
-    LArPandoraHelper::CollectSpacePoints(Event, fPFParticleLabel.label(), spacePointVector, spacePointsToHits, hitsToSpacePoints);
 
     // Shower dEdx calculation
     if (!ShowerEleHolder.CheckElement(fShowerStartPositionInputLabel)) {
@@ -133,9 +126,17 @@ namespace ShowerRecoTools {
       return 1;
     }
 
-    // Setup normalization tools
-    for (auto const& nt : fNormalizationTools)
-      nt->setup(Event);
+    if (fApplyCorrectionsInNorm) {
+      // Setup normalization tools and the hit -> space point map
+      for (auto const& nt : fNormalizationTools)
+        nt->setup(Event);
+
+      fHitsToSpacePoints.clear();
+      SpacePointVector spacePointVector;
+      SpacePointsToHits spacePointsToHits;
+      LArPandoraHelper::CollectSpacePoints(
+        Event, fPFParticleLabel.label(), spacePointVector, spacePointsToHits, fHitsToSpacePoints);
+    }
 
     //Get the initial track hits
     std::vector<art::Ptr<recob::Hit>> trackhits;
@@ -152,9 +153,6 @@ namespace ShowerRecoTools {
 
     geo::Vector_t showerDir = {-999, -999, -999};
     ShowerEleHolder.GetElement(fShowerDirectionInputLabel, showerDir);
-
-    geo::Vector_t showerPCADir = {-999, -999, -999};
-    ShowerEleHolder.GetElement("ShowerDirection", showerPCADir);
 
     geo::TPCID vtxTPC = fGeom->FindTPCAtPosition(geo::vect::toPoint(ShowerStartPosition));
 
@@ -212,12 +210,10 @@ namespace ShowerRecoTools {
         if (pitch) { // Check the pitch is calculated correctly
           int nhits = 0;
           std::vector<float> vQ;
+          std::vector<art::Ptr<recob::Hit>> usedHits;
 
           //Get the first wire
           int w0 = trackPlaneHits.at(0)->WireID().Wire;
-
-          geo::Point_t chargeWeightedPosition = {0, 0, 0}; // Initialize charge weighted position
-          double totalCharge = 0; // Initialize total charge
 
           for (auto const& hit : trackPlaneHits) {
 
@@ -237,25 +233,11 @@ namespace ShowerRecoTools {
               }
 
               vQ.push_back(q);
+              usedHits.push_back(hit);
               totQ += hit->Integral();
               avgT += hit->PeakTime();
               ++nhits;
-
-              HitsToSpacePoints::const_iterator hIter = hitsToSpacePoints.find(hit);
-              if (hitsToSpacePoints.end() != hIter){
-                const art::Ptr<recob::SpacePoint> spacepoint = hIter->second;
-
-                auto const& pos = spacepoint->position();  // this is a geo::Point_t
-                chargeWeightedPosition += geo::Vector_t{pos.X(), pos.Y(), pos.Z()} * q;
-                totalCharge += q; // Accumulate total charge
-              }
-
             }
-          }
-
-          // Calculate the final charge weighted average position
-          if (totalCharge > 0) {
-            chargeWeightedPosition /= totalCharge; // Normalize by total charge
           }
 
           if (totQ) {
@@ -268,17 +250,9 @@ namespace ShowerRecoTools {
             //Get the median and calculate the dEdx using the algorithm.
             if (vQ.size() > 0) {
               double dQdx = TMath::Median(vQ.size(), &vQ[0]) / pitch;
-              const auto& hit = trackPlaneHits.at(0);
-              double dQdxNorm = dQdx;
-              // Attempt the normalization //Mike 
-              if ( fApplyCorrectionsInNorm ) {
-                dQdxNorm = Normalize( dQdx,
-                  Event,
-                  *hit,
-                  chargeWeightedPosition,
-                  showerPCADir,
-                  0 );
-              }
+              double dQdxNorm = fApplyCorrectionsInNorm ?
+                                  NormalizedQdx(dQdx, Event, usedHits, vQ, showerDir) :
+                                  dQdx;
 
               dEdx = fCalorimetryAlg.dEdx_AREA(
                 clockData, detProp, dQdxNorm, avgT / nhits, trackPlaneHits.at(0)->WireID().Plane);
@@ -329,18 +303,31 @@ namespace ShowerRecoTools {
     return 0;
   }
 
-  const double ShowerUnidirectiondEdx::Normalize(double dQdx,
-          const art::Event& e,
-          const recob::Hit& h,
-          const geo::Point_t& location,
-          const geo::Vector_t& direction,
-          const double t0) const
+  double ShowerUnidirectiondEdx::NormalizedQdx(double dQdx,
+                                               const art::Event& e,
+                                               const std::vector<art::Ptr<recob::Hit>>& hits,
+                                               const std::vector<float>& charges,
+                                               const geo::Vector_t& direction) const
   {
-    double ret = dQdx;
-    for (auto const& nt : fNormalizationTools) {
-      ret = nt->Normalize(ret, e, h, location, direction, t0);
+    if (hits.empty()) return dQdx;
+
+    // Charge-weighted position of the space points associated to the used hits
+    geo::Vector_t weightedPos = {0, 0, 0};
+    double totalCharge = 0;
+    for (size_t i = 0; i < hits.size(); ++i) {
+      auto const hIter = fHitsToSpacePoints.find(hits[i]);
+      if (hIter == fHitsToSpacePoints.end()) continue;
+      auto const& pos = hIter->second->position();
+      weightedPos += geo::Vector_t{pos.X(), pos.Y(), pos.Z()} * charges[i];
+      totalCharge += charges[i];
     }
-    
+    if (totalCharge > 0) weightedPos /= totalCharge;
+    const geo::Point_t location = {weightedPos.X(), weightedPos.Y(), weightedPos.Z()};
+
+    double ret = dQdx;
+    for (auto const& nt : fNormalizationTools)
+      ret = nt->Normalize(ret, e, *hits.front(), location, direction, 0);
+
     return ret;
   }
 }

@@ -142,9 +142,7 @@ namespace ShowerRecoTools {
     if ( fApplyCorrectionsInNorm ) {
       auto tool_psets = pset.get< std::vector< fhicl::ParameterSet > >("NormTools");
 
-      int tCounter = 0;
       for ( auto const& tool_pset : tool_psets ) {
-        tCounter++;
         fNormalizationTools.push_back( art::make_tool<INormalizeCharge>(tool_pset) );
       }
     }
@@ -189,8 +187,10 @@ namespace ShowerRecoTools {
     auto const spHandle = Event.getValidHandle<std::vector<recob::SpacePoint>>(fPFParticleLabel);
 
     // Setup normalization tools
-    for (auto const& nt : fNormalizationTools)
-      nt->setup(Event);
+    if (fApplyCorrectionsInNorm) {
+      for (auto const& nt : fNormalizationTools)
+        nt->setup(Event);
+    }
 
     // Get the hits associated with the space points
     const art::FindManyP<recob::Hit>& fmsp =
@@ -353,7 +353,6 @@ namespace ShowerRecoTools {
         localEField = IShowerTool::GetLArPandoraShowerAlg().SCECorrectEField(localEField, pos);
       }
 
-      // Attempt the normalization //Ivan
       double dQdxNorm = dQdx;
       if ( fApplyCorrectionsInNorm ) {
         dQdxNorm = Normalize( dQdx,
