@@ -45,15 +45,15 @@ namespace ShowerRecoTools {
                          reco::shower::ShowerElementHolder& ShowerElementHolder) override;
 
   private:
-    double CalculateEnergy(const art::Event& Event,
+    double CalculateEnergy(const art::Event& event,
                            const detinfo::DetectorClocksData& clockData,
                            const detinfo::DetectorPropertiesData& detProp,
                            const std::vector<art::Ptr<recob::Hit>>& hits,
                            const geo::PlaneID::PlaneID_t plane) const;
 
     // Normalize the hit charge using its space point position and the shower direction
-    double NormalizedHitCharge(double charge,
-                               const art::Event& e,
+    double NormalizedHitCharge(const art::Event& e,
+                               double charge,                         
                                const art::Ptr<recob::Hit>& hit) const;
 
     art::InputTag fPFParticleLabel;
@@ -200,7 +200,7 @@ namespace ShowerRecoTools {
   }
 
   // function to calculate the reco energy
-  double ShowerNumElectronsEnergy::CalculateEnergy(const art::Event& Event,
+  double ShowerNumElectronsEnergy::CalculateEnergy(const art::Event& event,
                                                    const detinfo::DetectorClocksData& clockData,
                                                    const detinfo::DetectorPropertiesData& detProp,
                                                    const std::vector<art::Ptr<recob::Hit>>& hits,
@@ -225,7 +225,7 @@ namespace ShowerRecoTools {
 
       hitCharge /= fRecombinationFactor;
 
-      if (fApplyCorrectionsInNorm) hitCharge = NormalizedHitCharge(hitCharge, Event, hit);
+      if (fApplyCorrectionsInNorm) hitCharge = NormalizedHitCharge(event, hitCharge, hit);
 
       correctedtotalCharge += hitCharge;
     }
@@ -235,8 +235,8 @@ namespace ShowerRecoTools {
     return totalEnergy;
   }
 
-  double ShowerNumElectronsEnergy::NormalizedHitCharge(double charge,
-                                                       const art::Event& e,
+  double ShowerNumElectronsEnergy::NormalizedHitCharge(const art::Event& e,
+                                                       double charge,
                                                        const art::Ptr<recob::Hit>& hit) const
   {
     // Hits without space points contribute uncorrected charge
