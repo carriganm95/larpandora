@@ -70,6 +70,7 @@ cet_build_plugin(ShowerNumElectronsEnergy larpandora::ShowerTool
   lardataobj::RecoBase
   larcoreobj::headers
   larpandora::LArPandoraInterface
+  art_plugin_support::toolMaker
 )
 
 cet_build_plugin(ShowerPCADirection larpandora::ShowerTool
@@ -161,6 +162,7 @@ cet_build_plugin(ShowerTrajPointdEdx larpandora::ShowerTool
   lardata::DetectorClocksService
   lardata::DetectorPropertiesService
   lardataobj::RecoBase
+  art_plugin_support::toolMaker
 )
 
 cet_build_plugin(ShowerUnidirectiondEdx larpandora::ShowerTool
@@ -169,7 +171,7 @@ cet_build_plugin(ShowerUnidirectiondEdx larpandora::ShowerTool
   lardata::DetectorClocksService
   lardata::DetectorPropertiesService
   larpandora::LArPandoraInterface
-
+  art_plugin_support::toolMaker
 )
 
 add_subdirectory(Cheating)
