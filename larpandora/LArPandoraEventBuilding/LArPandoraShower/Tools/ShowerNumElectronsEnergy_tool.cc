@@ -52,7 +52,7 @@ namespace ShowerRecoTools {
                            const geo::PlaneID::PlaneID_t plane) const;
 
     // Normalize the hit charge using its space point position and the shower direction
-    double NormalizedHitCharge(const art::event& e,
+    double NormalizedHitCharge(const art::Event& e,
                                double charge,                         
                                const art::Ptr<recob::Hit>& hit) const;
 
@@ -237,7 +237,7 @@ namespace ShowerRecoTools {
     return totalEnergy;
   }
 
-  double ShowerNumElectronsEnergy::NormalizedHitCharge(const art::event& e,
+  double ShowerNumElectronsEnergy::NormalizedHitCharge(const art::Event& e,
                                                        double charge,
                                                        const art::Ptr<recob::Hit>& hit) const
   {
